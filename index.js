@@ -4,43 +4,22 @@ const ioHook = require('iohook');
 const robot = require('robotjs');
 const _ = require('lodash');
 const Promise = require('bluebird');
+const myWorkflows = require('./workflows')
+const triggers = require('./triggers')
+
+let CURRENTLY_EXECUTING = false;
+let IS_KEY_UP = true;
 
 // start ioHook
 ioHook.start();
 // ioHook.setDebug(true); // Uncomment this line for see all debug information from iohook
 
 // Key constants
-const DESKTOP_SHORTCUT = 'DESKTOP_SHORTCUT'
 const EXECUTION_TIMEOUT = 500
-const CTRL = 29;
-const ALT = 56;
-const F7 = 65;
-
-// Astrokey Workflow
-const myWorkflows = [{
-  _id: 'abcdefabcdef123123',
-  label: 'My New Workflow',
-  author: 'aeksco',
-  created_by: 'created_by_user_id',
-  public: true, // PUBLICLY VISIBLE BOOLEAN
-  version_major: 0, // WORKFLOW VERSION
-  version_minor: 1, // WORKFLOW VERSION MINOR
-  compatible_with: [], // DEVICE_TYPE_VERSIONS (?)
-  steps: [
-    // { id: 2, order: 2, icon: 'fa-play-circle-o', type: 'MACRO', label: 'Run Macro', value: [] },
-    // { id: 3, order: 3, type: 'KEY_UP', label: 'Release Key' },
-    { id: 5, order: 5, icon: 'fa-paragraph', type: 'TEXT', label: 'Type', value: 'I love Alaina' },
-    { id: 6, order: 6, icon: 'fa-cube', type: 'KEY', value: 'enter' },
-    { id: 4, order: 4, icon: 'fa-clock-o', type: 'DELAY', label: 'Delay', value: 2000 },
-    { id: 6, order: 6, icon: 'fa-cube', type: 'KEY', value: 'enter' },
-    { id: 6, order: 6, icon: 'fa-cube', type: 'KEY', value: 'enter' },
-    { id: 5, order: 5, icon: 'fa-paragraph', type: 'TEXT', label: 'Type', value: 'SO MUCHHHHH' }
-  ],
-  triggers: [{
-    type: DESKTOP_SHORTCUT,
-    shortcut: [CTRL, F7]
-  }]
-}]
+// const CTRL = 29;
+// const ALT = 56;
+// const TAB = 15;
+// const F7 = 65;
 
 function typeString (string) {
   // console.log('Start typestring...')
@@ -60,6 +39,26 @@ function keyTap (key) {
   })
 }
 
+function keyUp (shortcut) {
+  return new Promise((resolve, reject) => {
+    // console.log('finish keytap.')
+    // ioHook.registerShortcut(shortcut, (keys) => {
+    //   console.log('Shortcut KEY UP WOW pressed with keys:', keys);
+    //   // return resolve()
+    //   // console.log('EXECUTING WORKFLOW')
+    // });
+    let interval;
+    interval = setInterval(() => {
+      // console.log('CHECKING INTERVAL')
+      if (IS_KEY_UP) {
+        clearInterval(interval)
+        return resolve()
+      }
+    }, 250)
+  })
+  // Registers shortcut
+}
+
 function delay (timeout) {
   // console.log('Start delay...')
   return new Promise((resolve, reject) => {
@@ -70,44 +69,87 @@ function delay (timeout) {
   })
 }
 
-// Setup keybindings
-_.each(myWorkflows, (workflow) => {
-  _.each(workflow.triggers, (trigger) => {
-    if (trigger.type === DESKTOP_SHORTCUT) {
+function runMacro (macro) {
+  // console.log('Start delay...')
+  return new Promise((resolve, reject) => {
+    _.each(macro, (step) => {
+      console.log(step)
+      if (step.position === 'KEY_DOWN') {
+        robot.keyToggle(step.key, 'down')
+      } else if (step.position === 'KEY_UP') {
+        robot.keyToggle(step.key, 'up')
+      } else {
+        robot.keyTap(step.key)
+      }
+    })
+    return resolve()
+    // setTimeout(() => {
+    //   // console.log('Delay finished.')
+    // }, timeout)
+  })
+}
 
-      // Registers shortcut
-      ioHook.registerShortcut(trigger.shortcut, (keys) => {
-        console.log('Shortcut pressed with keys:', keys);
-        // console.log('EXECUTING WORKFLOW')
+// // // //
 
-
-        // Execute workflow
-        setTimeout(() => {
-
-          // NOTE - each step is asynchonous - this should be considered for things like delays
-          Promise.each(workflow.steps, (step) => {
-            if (step.type === 'TEXT') {
-              return typeString(step.value)
-            } else if (step.type === 'DELAY') {
-              return delay(step.value)
-            } else if (step.type === 'KEY') {
-              return keyTap(step.value)
-            }
-          }).then(() => {
-            // console.log('WORKFLOW COMPLETE')
-          })
-        }, EXECUTION_TIMEOUT)
-
-      });
-
+function executeWorkflow ({ workflow, trigger }) {
+  // NOTE - each step is asynchonous - this should be considered for things like delays
+  return Promise.each(workflow.steps, (step) => {
+    if (step.type === 'TEXT') {
+      return typeString(step.value)
+    } else if (step.type === 'DELAY') {
+      return delay(step.value)
+    } else if (step.type === 'KEY') {
+      return keyTap(step.value)
+    } else if (step.type === 'KEY_UP') {
+      return keyUp(trigger.shortcut)
+    } else if (step.type === 'MACRO') {
+      return runMacro(step.value)
     }
   })
+}
+
+// // // //
+
+// Setup keybindings
+// TODO - break everything below out into a separate function
+_.each(triggers, (trigger) => {
+
+  // Registers shortcut
+  ioHook.registerShortcut(trigger.shortcut, (keys) => {
+
+    // Short-circuit execution if a workflow is currently in-progress
+    // TODO - should this be tied to a specific workflow, or should it short-circuit all?
+    if (CURRENTLY_EXECUTING) return
+    CURRENTLY_EXECUTING = true
+    IS_KEY_UP = false
+
+    console.log('Shortcut pressed with keys:', keys);
+    // console.log('EXECUTING WORKFLOW')
+
+    // Handle KEYUP event
+    // TODO - clean up this handler when the function is complete?
+    ioHook.on('keyup', (msg) => {
+      if (trigger.shortcut.includes(msg.keycode)) {
+        if (IS_KEY_UP) return
+        IS_KEY_UP = true
+      }
+    });
+
+    // Finds the workflow associated with this trigger
+    let workflow = _.find(myWorkflows, { _id: trigger.workflow_id })
+
+    // TODO - better error handling here...
+    if (!workflow) return
+
+    // // // //
+    // Execute workflow
+    executeWorkflow({ workflow, trigger })
+    .then(( ) => {
+      console.log('\n\nDONE EXECUTING\n\n')
+      CURRENTLY_EXECUTING = false
+    })
+    // // // //
+
+  });
+
 })
-
-
-// let shId = ioHook.registerShortcut([ALT, F7], (keys) => {
-// console.log('This shortcut will be called once. Keys:', keys);
-//   ioHook.unregisterShortcut(shId);
-// })
-
-// console.log('Hook started. Try type something or move mouse');
